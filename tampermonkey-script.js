@@ -1,198 +1,108 @@
 // ==UserScript==
 // @name         ChatGPT API By Browser Script
 // @namespace    http://tampermonkey.net/
-// @version      1
+// @version      2
 // @match        https://chatgpt.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=openai.com
 // @grant        GM_webRequest
-// @license MIT
+// @license      MIT
 // ==/UserScript==
 
 const log = (...args) => {
   console.log('chatgpt-api-by-browser-script', ...args);
-}
+};
 log('starting');
 
 const WS_URL = `ws://localhost:8765`;
 
 function cleanText(inputText) {
-  const invisibleCharsRegex =
-    /[\u200B\u200C\u200D\uFEFF]|[\u0000-\u001F\u007F-\u009F]/g;
-  const cleanedText = inputText.replace(invisibleCharsRegex, '');
-  return cleanedText;
+  return inputText.replace(/[​‌‍﻿]|[\u0000-\u001F\u007F-\u009F]/g, '');
 }
+
 function getTextFromNode(node) {
-
   let result = '';
-
   if (!node) return result;
-
-  if (
-    node.classList.contains('text-token-text-secondary') &&
-    node.classList.contains('bg-token-main-surface-secondary')
-  ) {
-    return result;
-  }
-
-  const childNodes = node.childNodes;
-
-  for (let i = 0; i < childNodes.length; i++) {
-    let childNode = childNodes[i];
-    if (childNode.nodeType === Node.TEXT_NODE) {
-      result += childNode.textContent;
-    } else if (childNode.nodeType === Node.ELEMENT_NODE) {
-      let tag = childNode.tagName.toLowerCase();
-      if (tag === 'code') {
-        result += getTextFromNode(childNode);
-      } else {
-        result += getTextFromNode(childNode);
-      }
+  if (node.classList.contains('text-token-text-secondary') && node.classList.contains('bg-token-main-surface-secondary')) return result;
+  
+  node.childNodes.forEach(child => {
+    if (child.nodeType === Node.TEXT_NODE) {
+      result += child.textContent;
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      result += getTextFromNode(child);
     }
-  }
-
+  });
   return cleanText(result);
 }
 
 function sleep(time) {
-  return new Promise((resolve) => setTimeout(resolve, time));
+  return new Promise(resolve => setTimeout(resolve, time));
 }
 
-// Main app class
 class App {
   constructor() {
     this.socket = null;
     this.observer = null;
     this.stop = false;
     this.dom = null;
-    this.lastText = null; // Track the last message text
+    this.lastText = null;
   }
 
-  async start({ text, model, newChat }) {
+  async start({ text }) {
     this.stop = false;
-    log('Starting to edit or send a message');
+    log('Updating or sending a new message');
 
-    // Check for the edit button
-    const editButton = document.querySelector(
-      'button[data-testid="fruitjuice-send-button-edit"]'
-    );
-    if (editButton) {
-      log('Edit button found, clicking it');
-      editButton.click();
-      await sleep(500);
+    // Select the editable div inside the form
+    let inputField = document.querySelector('.ProseMirror');
 
-      // Select all text and replace with the new text
-      const textarea = document.querySelector('textarea');
-      if (textarea) {
-        log('Textarea found, replacing text');
-        textarea.value = text;
-        textarea.select();
-        const event = new Event('input', { bubbles: true });
-        textarea.dispatchEvent(event);
+    // Simulate typing into the field
+    inputField.focus();
+    inputField.innerHTML = text;  // Directly set the innerHTML
 
-        // Adding a small delay before pressing the send button
-        await sleep(500);
+    // Trigger input event to notify React/JS framework
+    inputField.dispatchEvent(new Event('input', { bubbles: true }));
 
-        // Click the send button to send the edited message
-        const sendButton = document.querySelector(
-          'button[data-testid="fruitjuice-send-button"]'
-        );
-        if (sendButton) {
-          log('Send button found, clicking it');
-          sendButton.click();
-        } else {
-          log('Error: Send button not found');
-        }
-      } else {
-        log('Error: Textarea not found');
-      }
-    } else {
-      log('No edit button found, sending a new message');
-      const textarea = document.querySelector('textarea');
-      if (textarea) {
-        textarea.value = text;
-        const event = new Event('input', { bubbles: true });
-        textarea.dispatchEvent(event);
-        await sleep(500);
-        const sendButton = document.querySelector(
-          'button[data-testid="fruitjuice-send-button"]'
-        );
-        if (sendButton) {
-          log('Send button found, clicking it');
-          sendButton.click();
-        } else {
-          log('Error: Send button not found');
-        }
-      } else {
-        log('Error: Textarea not found');
-      }
-    }
+
+    await sleep(500);
+    
+    // Simulate pressing Enter key to submit
+    inputField.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true
+    }));
 
     this.observeMutations();
   }
 
   async observeMutations() {
     let isStart = false;
-    this.observer = new MutationObserver(async (mutations) => {
-      let stopButton = document.querySelector('button.bg-black .icon-lg');
-      if (stopButton) {
-        isStart = true;
-      }
-
-      if (!isStart) {
-        log('Not start, there is no stop button');
-        return;
-      }
-
-      const list = [...document.querySelectorAll('div.agent-turn')];
-      const last = list[list.length - 1];
-      if (!last && stopButton) {
-        log('Error: No last message found');
-        return;
-      }
-
-      let lastText = getTextFromNode(
-        last.querySelector('div[data-message-author-role="assistant"]')
-      );
-
-      if ((!lastText || lastText === this.lastText) && stopButton) {
-        log('Error: Last message text not found or unchanged');
-        return;
-      }
-
+    this.observer = new MutationObserver(async () => {
+      const stopButton = document.querySelector('button.bg-black .icon-lg');
+      if (stopButton) isStart = true;
+      if (!isStart) return;
+      
+      const messages = [...document.querySelectorAll('div.agent-turn')];
+      const lastMessage = messages[messages.length - 1];
+      if (!lastMessage) return;
+      
+      let lastText = getTextFromNode(lastMessage.querySelector('div[data-message-author-role="assistant"]'));
+      if (!lastText || lastText === this.lastText) return;
+      
       this.lastText = lastText;
-      log('send', {
-        text: lastText,
-      });
-      this.socket.send(
-        JSON.stringify({
-          type: 'answer',
-          text: lastText,
-        })
-      );
-
+      log('Sending response:', { text: lastText });
+      this.socket.send(JSON.stringify({ type: 'answer', text: lastText }));
+      
       if (!stopButton) {
         this.observer.disconnect();
-
         if (this.stop) return;
         this.stop = true;
-        log('send', {
-          type: 'stop',
-        });
-        this.socket.send(
-          JSON.stringify({
-            type: 'stop',
-          })
-        );
-
+        log('Sending stop signal');
+        this.socket.send(JSON.stringify({ type: 'stop' }));
       }
     });
-
-    const observerConfig = {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    };
-    this.observer.observe(document.body, observerConfig);
+    this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
   sendHeartbeat() {
@@ -205,34 +115,25 @@ class App {
   connect() {
     this.socket = new WebSocket(WS_URL);
     this.socket.onopen = () => {
-      log('Server connected, can process requests now.');
+      log('Server connected');
       this.dom.innerHTML = '<div style="color: green;">API Connected!</div>';
     };
     this.socket.onclose = () => {
-      log(
-        'Error: The server connection has been disconnected, the request cannot be processed.'
-      );
+      log('Server disconnected, attempting to reconnect...');
       this.dom.innerHTML = '<div style="color: red;">API Disconnected!</div>';
-
-      setTimeout(() => {
-        log('Attempting to reconnect...');
-        this.connect();
-      }, 2000);
+      setTimeout(() => this.connect(), 2000);
     };
     this.socket.onerror = (error) => {
-      log(
-        'Error: Server connection error, please check the server.',
-        error
-      );
+      log('Server connection error:', error);
       this.dom.innerHTML = '<div style="color: red;">API Error!</div>';
     };
     this.socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        log('Received data from server', data);
+        log('Received data:', data);
         this.start(data);
       } catch (error) {
-        log('Error: Failed to parse server message', error);
+        log('Error parsing server message:', error);
       }
     };
   }
@@ -240,12 +141,9 @@ class App {
   init() {
     window.addEventListener('load', () => {
       this.dom = document.createElement('div');
-      this.dom.style =
-        'position: fixed; top: 10px; right: 10px; z-index: 9999; display: flex; justify-content: center; align-items: center;';
+      this.dom.style = 'position: fixed; top: 10px; right: 10px; z-index: 9999;';
       document.body.appendChild(this.dom);
-
       this.connect();
-
       setInterval(() => this.sendHeartbeat(), 30000);
     });
   }
